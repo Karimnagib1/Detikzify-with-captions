@@ -28,6 +28,7 @@ from detikzify.evaluate import (
 )
 from detikzify.infer import DetikzifyPipeline, TikzDocument
 from detikzify.model import load as load_model
+from detikzify.model import load_lora
 
 WORLD_SIZE = int(getenv("WORLD_SIZE", 1))
 RANK = int(getenv("RANK", 0))
@@ -60,17 +61,29 @@ def parse_args():
         type=int,
         help="minimum time to run MCTS in seconds",
     )
+    # argument_parser.add_argument(
+    #     "--lora_weights",
+    #     help="path to lora weights directory",
+    #     required=True
+    # )
     argument_parser.add_argument(
         "--use_sketches",
         action="store_true",
         help="condition model on sketches instead of images",
     )
+    # argument_parser.add_argument(
+    #     "--path",
+    #     nargs='+',
+    #     metavar="MODEL=PATH",
+    #     required=True,
+    #     help="(multiple) key-value pairs of model names and paths/urls to models/adapters (local or hub) or json files",
+    # )
     argument_parser.add_argument(
         "--path",
         nargs='+',
-        metavar="MODEL=PATH",
+        metavar="MODEL=PATH[,LORA_WEIGHTS=PATH]",
         required=True,
-        help="(multiple) key-value pairs of model names and paths/urls to models/adapters (local or hub) or json files",
+        help="multiple key-value pairs of model names and paths/urls to models/adapters, with optional LoRA weights (e.g., MODEL=path,LORA_WEIGHTS=path)",
     )
     return argument_parser.parse_args()
 
@@ -101,14 +114,24 @@ def generate(pipe, image, strict=False, timeout=None, **tqdm_kwargs):
             break
     return [tikzpic for _, tikzpic in sorted(tikzpics, key=itemgetter(0))]
 
-def predict(model_name, base_model, testset, cache_file=None, timeout=None, key="image"):
+def predict(model_name, base_model, testset, cache_file=None, timeout=None, key="image", lora_weights_path=None):
     predictions, worker_preds = list(), list()
-    model, tokenizer = load_model(
-        base_model=base_model,
-        device_map=RANK,
-        torch_dtype=bfloat16 if is_cuda_available() and is_bf16_supported() else float16,
-        attn_implementation="flash_attention_2" if is_flash_attn_2_available() else None,
-    )
+    if lora_weights_path:
+        model, tokenizer = load_lora(
+            base_model=base_model,
+            lora_weights_path=lora_weights_path,
+            device_map=RANK,
+            torch_dtype=bfloat16 if is_cuda_available() and is_bf16_supported() else float16,
+            attn_implementation="flash_attention_2" if is_flash_attn_2_available() else None,
+        )
+    else:
+        model, tokenizer = load_model(
+            base_model=base_model,
+            lora_training=False,
+            device_map=RANK,
+            torch_dtype=bfloat16 if is_cuda_available() and is_bf16_supported() else float16,
+            attn_implementation="flash_attention_2" if is_flash_attn_2_available() else None,
+        )
     # if we don't have a timeout (i.e., only run mcts until we obtain smth compileable), we can use fast metrics
     metric_type = "model" if timeout else "fast"
     pipe = DetikzifyPipeline(model=model, tokenizer=tokenizer, metric=metric_type)
@@ -184,20 +207,39 @@ if __name__ == "__main__":
     testset = load_dataset("parquet", data_files={"test": args.testset}, split="test").sort("caption") # type: ignore
 
     predictions = defaultdict(list)
-    for model_name, path in map(lambda s: s.split('='), tqdm(args.path, desc="Predicting")):
+       
+    for item in tqdm(args.path, desc="Predicting"):
+        # Split the model argument string into parts
+        model_parts = dict(part.split('=') for part in item.split(',') if '=' in part)
+        model_name = model_parts.get("MODEL")
+        path = model_parts.get("PATH")
+        lora_weights = model_parts.get("LORA_WEIGHTS", None)
+
         if path.endswith("json"):
             with open(path) as f:
                 predictions[model_name] = [[TikzDocument(code, None) for code in sample] for sample in load_json(f)]
         else:
             cache_file = join(args.cache_dir, f'{model_name}.json') if args.cache_dir else None
-            predictions[model_name] = predict(
-                model_name=model_name,
-                base_model=path,
-                testset=testset,
-                cache_file=cache_file,
-                timeout=args.timeout,
-                key="sketch" if args.use_sketches else "image"
-            )
+
+            if lora_weights:
+                 predictions[model_name] = predict(
+                    model_name=model_name,
+                    base_model=path,
+                    testset=testset,
+                    cache_file=cache_file,
+                    timeout=args.timeout,
+                    key="sketch" if args.use_sketches else "image",
+                    lora_weights_path=lora_weights
+                )
+            else: 
+                predictions[model_name] = predict(
+                    model_name=model_name,
+                    base_model=path,
+                    testset=testset,
+                    cache_file=cache_file,
+                    timeout=args.timeout,
+                    key="sketch" if args.use_sketches else "image"
+                )
 
     if RANK == 0: # Scoring only on main process
         scores = dict()
