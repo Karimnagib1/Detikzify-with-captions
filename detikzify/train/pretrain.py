@@ -11,6 +11,7 @@ IGNORE_INDEX = -100
 
 def preprocess(
     texts: str | List[str],
+    captions: str | List[str],
     tokenizer,
     patch_token,
     num_patches,
@@ -20,7 +21,7 @@ def preprocess(
     patch_token_id = tokenizer.convert_tokens_to_ids(patch_token)
     patch_tokens = num_patches * patch_token
     input_ids = tokenizer(
-        patch_tokens + texts if isinstance(texts, str) else [patch_tokens + text for text in texts],
+        captions + patch_tokens + texts if isinstance(texts, str) else [captions[i] + patch_tokens + texts[i] for i in range(len(texts))],
         max_length=tokenizer.model_max_length,
         truncation=truncation,
         return_tensors=return_tensors,
@@ -29,7 +30,13 @@ def preprocess(
 
     # do not train on image patch tokens
     for label_ids in input_ids['labels']:
+        skipped_caption_tokens: bool= False
         for idx, label_id in enumerate(label_ids):
+            if not skipped_caption_tokens and label_id != patch_token_id:
+                 label_ids[idx] = IGNORE_INDEX
+                 continue
+            else:
+                 skipped_caption_tokens = True
             if label_id == patch_token_id != label_ids[idx + 1]:
                 label_ids[idx] = IGNORE_INDEX
                 break

@@ -49,15 +49,15 @@ class Sketchifier:
     def __call__(self, *args, **kwargs):
         return self.sketchify(*args, **kwargs)
 
-    def sketchify(self, imgs):
-        with torch.inference_mode(), torch.autocast(self.device.type, enabled=False): # type: ignore
-            return [convert(img, "png") for img in self.pipe(
-                prompt=["turn it into a doodle"] * len(imgs),
-                image=imgs,
-                num_inference_steps=10,
-                image_guidance_scale=1.2,
-                guidance_scale=15,
-            ).images]
+    # def sketchify(self, imgs):
+    #     with torch.inference_mode(), torch.autocast(self.device.type, enabled=False): # type: ignore
+    #         return [convert(img, "png") for img in self.pipe(
+    #             prompt=["turn it into a doodle"] * len(imgs),
+    #             image=imgs,
+    #             num_inference_steps=10,
+    #             image_guidance_scale=1.2,
+    #             guidance_scale=15,
+    #         ).images]
 
 class ImageSketchDataset(Dataset, TrainerCallback):
     """
@@ -76,10 +76,10 @@ class ImageSketchDataset(Dataset, TrainerCallback):
     def __getitem__(self, i) -> Dict[str, torch.Tensor]:
         item = self.dataset[i]
 
-        if (sketch:=item['sketches'][self.cur_epoch]):
-            image = Image.open(BytesIO(sketch['bytes']))
-        else:
-            image = item['image']
+        # if (sketch:=item['sketches'][self.cur_epoch]):
+        #     image = Image.open(BytesIO(sketch['bytes']))
+        # else:
+        image = item['image']
         return dict(
             input_ids=torch.tensor(item["input_ids"]),
             labels=torch.tensor(item["labels"]),
@@ -89,24 +89,24 @@ class ImageSketchDataset(Dataset, TrainerCallback):
     def on_epoch_end(self, *args, **kwargs):
         self.cur_epoch += 1
 
-def sketchify(dataset, num_epochs, ratio, sketchifier):
-    """
-    Randomly sketchify <ratio> of all examples in <dataset> for each epoch
-    given with <num_epochs>.
-    """
-    # prepare the sketches (distribute load among all workers)
-    worker_sketches, all_sketches = list(), WORLD_SIZE * [None]
-    for i in torch.arange(len(dataset['image'])).tensor_split(WORLD_SIZE)[RANK]:
-        # randomize in which epochs how many images should be sketchified
-        num_sketches = choice([floor(product:=ratio*num_epochs), ceil(product)])
-        sketch_epochs = sample(range(num_epochs), k=num_sketches)
-        # generate the sketches
-        sketches = sketchifier(num_sketches * [dataset['image'][i.item()]])
-        worker_sketches.append([sketches.pop() if epoch in sketch_epochs else None for epoch in range(num_epochs)])
+# def sketchify(dataset, num_epochs, ratio, sketchifier):
+#     """
+#     Randomly sketchify <ratio> of all examples in <dataset> for each epoch
+#     given with <num_epochs>.
+#     """
+#     # prepare the sketches (distribute load among all workers)
+#     worker_sketches, all_sketches = list(), WORLD_SIZE * [None]
+#     for i in torch.arange(len(dataset['image'])).tensor_split(WORLD_SIZE)[RANK]:
+#         # randomize in which epochs how many images should be sketchified
+#         num_sketches = choice([floor(product:=ratio*num_epochs), ceil(product)])
+#         sketch_epochs = sample(range(num_epochs), k=num_sketches)
+#         # generate the sketches
+#         sketches = sketchifier(num_sketches * [dataset['image'][i.item()]])
+#         worker_sketches.append([sketches.pop() if epoch in sketch_epochs else None for epoch in range(num_epochs)])
 
-    torch.distributed.all_gather_object(all_sketches, worker_sketches) # type: ignore
-    dataset['sketches'] = list(chain.from_iterable(all_sketches)) # type: ignore
-    return dataset
+#     torch.distributed.all_gather_object(all_sketches, worker_sketches) # type: ignore
+#     dataset['sketches'] = list(chain.from_iterable(all_sketches)) # type: ignore
+#     return dataset
 
 def train(
     output_dir: str,
@@ -116,10 +116,10 @@ def train(
     overwrite=False,
     deepspeed=None,
     # training hyperparams
-    batch_size: int = 128,
+    batch_size: int = 32,
     micro_batch_size: int = 1,
     num_epochs: int = 3,
-    learning_rate: float = 4e-5,
+    learning_rate: float = 3e-4,
     sketchification_ratio: float = 0.5,
     gradient_checkpointing: bool = False,
     group_by_length: bool = False,
@@ -131,18 +131,18 @@ def train(
     def prepare_dataset(dataset):
         patch_token = tokenizer.text.convert_ids_to_tokens(model.config.patch_token_id)
         max_len = tokenizer.text.model_max_length
+        # dataset = dataset.map(
+        #     sketchify,
+        #     batched=True,
+        #     desc="Sketchify",
+        #     fn_kwargs=dict(
+        #         num_epochs=num_epochs,
+        #         ratio=sketchification_ratio,
+        #         sketchifier=Sketchifier()
+        #     )
+        # )
         dataset = dataset.map(
-            sketchify,
-            batched=True,
-            desc="Sketchify",
-            fn_kwargs=dict(
-                num_epochs=num_epochs,
-                ratio=sketchification_ratio,
-                sketchifier=Sketchifier()
-            )
-        )
-        dataset = dataset.map(
-            lambda exs, **kwargs: preprocess(exs['text'], **kwargs) | {"image": exs['image']},
+            lambda exs, **kwargs: preprocess(exs['text'], exs["caption"], **kwargs) | {"image": exs['image']},
             batched=True,
             desc="Tokenize",
             fn_kwargs=dict(
@@ -194,13 +194,12 @@ def train(
             group_by_length=group_by_length,
             deepspeed=deepspeed,
         ),
-        callbacks=[SplitEpochSaveCallback(step_size=0.25)],
+        callbacks=[SplitEpochSaveCallback(step_size=0.1)],
         data_collator=DataCollatorForImageTextTraining(
             tokenizer=tokenizer.text,
             pad_to_multiple_of=8
         )
     )
-
     model.config.use_cache = False
     trainer.add_callback(trainer.train_dataset)
     trainer.train(resume_from_checkpoint=last_checkpoint)

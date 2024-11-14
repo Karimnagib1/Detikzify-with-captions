@@ -51,7 +51,7 @@ if __name__ == "__main__":
     model, tokenizer = load(args.base_model, pretrain_mm_mlp_adapter=args.projector)
 
     datikz: Dataset = load_dataset("parquet", data_files=args.datikz, split="train") # type: ignore
-    datikz = datikz.select_columns(["image", "code"]).rename_column("code", "text")
+    datikz = datikz.select_columns(["image", "code", "caption"]).rename_column("code", "text")
 
     train(
         model=model,
