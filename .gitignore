@@ -161,3 +161,8 @@ cython_debug/
 
 # Project pecific
 */_version.py
+
+# Models
+
+/examples/models
+/examples/projector
