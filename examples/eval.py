@@ -103,10 +103,10 @@ def interleave(chunks):
             break
     return interleaved
 
-def generate(pipe, image, strict=False, timeout=None, **tqdm_kwargs):
+def generate(pipe, image, caption, strict=False, timeout=None, **tqdm_kwargs):
     """Run MCTS until the generated tikz code compiles."""
     start, success, tikzpics = time(), False, set()
-    for score, tikzpic in tqdm(pipe.simulate(image=image), desc="Try", **tqdm_kwargs):
+    for score, tikzpic in tqdm(pipe.simulate(image=image, caption=caption), desc="Try", **tqdm_kwargs):
         tikzpics.add((score, tikzpic))
         if not tikzpic.compiled_with_errors if strict else tikzpic.is_rasterizable:
             success = True
@@ -143,7 +143,7 @@ def predict(model_name, base_model, testset, cache_file=None, timeout=None, key=
         worker_chunk = list(chunk(list(testset)[len(predictions):], WORLD_SIZE))[RANK]
         # FIXME: right now there only is a progress bar for Rank 0
         for item in tqdm(worker_chunk, desc=f"{model_name.title()} ({RANK})", disable=RANK!=0):
-            tikz = generate(pipe, image=item[key], timeout=timeout, position=1, leave=False, disable=RANK!=0)
+            tikz = generate(pipe, image=item[key], caption = item["caption"], timeout=timeout, position=1, leave=False, disable=RANK!=0)
             worker_preds.append(tikz)
         del model, tokenizer, pipe
     finally:
