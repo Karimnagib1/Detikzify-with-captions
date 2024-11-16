@@ -131,6 +131,7 @@ class DetikzifyGenerator:
         model,
         tokenizer,
         image: Image.Image,
+        caption: str,
         metric: Optional[Metric] = None,
         compile_timeout: Optional[int] = 60,
         mcts_timeout: Optional[int] = None,
@@ -147,6 +148,7 @@ class DetikzifyGenerator:
         self.tokenizer = tokenizer
         self.metric = metric
         self.image = image
+        self.caption = caption,
         self.compile_timeout = compile_timeout
         self.mcts_timeout = mcts_timeout
         self.streamer = streamer
@@ -161,7 +163,7 @@ class DetikzifyGenerator:
         self.montecarlo = MonteCarlo(
             root_node=WideNode(
                 tokenizer.text(
-                    tokenizer.text.convert_ids_to_tokens(model.config.patch_token_id) * model.config.num_patches,
+                    caption + tokenizer.text.convert_ids_to_tokens(model.config.patch_token_id) * model.config.num_patches,
                     add_special_tokens=False,
                     return_tensors="pt",
                 ).input_ids.to(model.device).squeeze(),
@@ -368,6 +370,7 @@ class DetikzifyPipeline:
     def simulate(
         self,
         image: Union[Image.Image, str],
+        caption: str,
         preprocess: bool = True,
         expansions: Optional[Numeric] = None,
         timeout: Optional[int] = None,
@@ -392,6 +395,7 @@ class DetikzifyPipeline:
             metric=self.metric,
             mcts_timeout=timeout or None,
             image=self.load(image, preprocess=preprocess),
+            caption=caption,
             **self.gen_kwargs,
             **gen_kwargs
         )

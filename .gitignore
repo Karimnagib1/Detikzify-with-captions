@@ -166,3 +166,4 @@ cython_debug/
 
 /examples/models
 /examples/projector
+/examples/run_eval.sh
